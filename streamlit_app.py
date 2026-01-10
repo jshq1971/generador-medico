@@ -33,7 +33,7 @@ if uploaded_file is not None:
                     tmp_path = tmp.name
                 
                 # Subir a Gemini
-                model = genai.GenerativeModel("gemini-1.5-flash") # Flash es más rápido para esto
+                model = genai.GenerativeModel("gemini-1.5-pro") # Flash es más rápido para esto
                 g_file = genai.upload_file(tmp_path)
                 
                 prompt = f"Analiza este PDF y crea una presentación de {num_slides} diapositivas. Para cada diapositiva dame: Título y Contenido (3 puntos clave). Responde en español."
