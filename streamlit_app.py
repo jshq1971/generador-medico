@@ -42,7 +42,7 @@ if uploaded_file:
                             "content": f"A partir de este texto, genera {num_slides} diapositivas con Título y 3 puntos clave cada una. Responde en ESPAÑOL.\n\nTexto: {text[:15000]}"
                         }
                     ],
-                    model="llama3-70b-8192",
+                    model="llama-3.1-8b-instant",
                 )
                 response_text = chat_completion.choices[0].message.content
 
