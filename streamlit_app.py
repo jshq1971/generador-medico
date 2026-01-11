@@ -3,7 +3,6 @@ from groq import Groq
 from pypdf import PdfReader
 import tempfile
 import os
-import re
 from datetime import date
 from pptx import Presentation
 from pptx.util import Inches, Pt
@@ -11,81 +10,33 @@ from pptx.enum.text import PP_ALIGN
 from pptx.dml.color import RGBColor
 from pptx.enum.shapes import MSO_SHAPE
 
-# Configuración de página
-st.set_page_config(page_title="PPT Médico 60+", page_icon="🏥", layout="wide")
-
-# Estilos Médicos (Oxford Blue & Clinical White)
-PRIMARY = RGBColor(0, 33, 71)
-ACCENT = RGBColor(0, 122, 255)
-TEXT_DARK = RGBColor(30, 30, 30)
-WHITE = RGBColor(255, 255, 255)
-SLIDE_W, SLIDE_H = Inches(13.33), Inches(7.5)
+# --- CONFIGURACIÓN ---
+st.set_page_config(page_title="PPT Médico 60+ Estable", page_icon="🏥")
 
 if "GROQ_API_KEY" not in st.secrets:
-    st.error("❌ Configura GROQ_API_KEY en Secrets")
+    st.error("Falta GROQ_API_KEY en Secrets")
     st.stop()
 
 client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 
-# --- FUNCIONES DE DISEÑO ---
-def apply_medical_style(slide, title_text, slide_num, total):
-    # Barra superior fina
-    bar = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0, SLIDE_W, Inches(0.15))
-    bar.fill.solid()
-    bar.fill.fore_color.rgb = PRIMARY
-    bar.line.fill.background()
-    
-    # Título
-    title_box = slide.shapes.add_textbox(Inches(0.8), Inches(0.4), Inches(11.5), Inches(1))
-    tf = title_box.text_frame
-    p = tf.paragraphs[0]
-    p.text = title_text.upper()
-    p.font.size = Pt(28)
-    p.font.bold = True
-    p.font.color.rgb = PRIMARY
-    
-    # Numeración
-    num_box = slide.shapes.add_textbox(Inches(12.3), Inches(6.8), Inches(1), Inches(0.5))
-    p_num = num_box.text_frame.paragraphs[0]
-    p_num.text = f"{slide_num}/{total}"
-    p_num.font.size = Pt(12)
-    p_num.font.color.rgb = RGBColor(150, 150, 150)
-    p_num.alignment = PP_ALIGN.RIGHT
+# Colores Médicos
+PRIMARY = RGBColor(0, 33, 71)
+WHITE = RGBColor(255, 255, 255)
+SLIDE_W, SLIDE_H = Inches(13.33), Inches(7.5)
 
-def add_bullets(slide, bullets):
-    body = slide.shapes.add_textbox(Inches(1), Inches(1.6), Inches(11.3), Inches(5))
-    tf = body.text_frame
-    tf.word_wrap = True
-    for b in bullets[:7]: # Máximo 7 puntos por slide para legibilidad
-        p = tf.add_paragraph()
-        p.text = f"• {b}"
-        p.font.size = Pt(18)
-        p.font.color.rgb = TEXT_DARK
-        p.space_after = Pt(10)
+# --- ESTADO DE SESIÓN (Para evitar el 404) ---
+if "current_step" not in st.session_state:
+    st.session_state.current_step = 0
+if "all_slides_data" not in st.session_state:
+    st.session_state.all_slides_data = []
+if "pdf_text" not in st.session_state:
+    st.session_state.pdf_text = ""
 
-# --- MOTOR DE GENERACIÓN ---
-def get_slides_batch(text, num_slides, batch_idx):
-    # Dividimos el texto para que la IA se enfoque en partes diferentes del PDF
-    start = batch_idx * 5000
-    segment = text[start : start + 15000]
-    
-    prompt = f"""
-    Eres un Especialista en Oncología y Educación Médica. 
-    Genera EXACTAMENTE {num_slides} diapositivas de contenido técnico.
-    
-    FORMATO:
-    ---SLIDE---
-    TÍTULO: [Título clínico]
-    PUNTOS:
-    - [Dato relevante 1]
-    - [Dato relevante 2]
-    - [Dato relevante 3]
-    
-    Usa terminología médica avanzada. No resumas demasiado, mantén el rigor.
-    TEXTO DE REFERENCIA:
-    {segment}
-    """
-    
+# --- FUNCIONES ---
+def get_batch(text, num, block_num):
+    start_char = block_num * 6000
+    segment = text[start_char : start_char + 15000]
+    prompt = f"Actúa como oncólogo. Genera {num} diapositivas técnicas. Formato: ---SLIDE--- TÍTULO: [título] PUNTOS: - [punto 1] - [punto 2]. Texto: {segment}"
     chat = client.chat.completions.create(
         messages=[{"role": "user", "content": prompt}],
         model="llama-3.1-8b-instant",
@@ -93,89 +44,86 @@ def get_slides_batch(text, num_slides, batch_idx):
     )
     return chat.choices[0].message.content
 
-# --- INTERFAZ ---
-st.title("🏥 Generador de Clases Médicas (60 Diapositivas)")
-st.markdown("Este sistema genera presentaciones extensas dividiendo el trabajo en bloques para evitar errores de conexión.")
+def create_pptx(data_list, filename):
+    prs = Presentation()
+    prs.slide_width, prs.slide_height = SLIDE_W, SLIDE_H
+    
+    # Portada
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    rect = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0, SLIDE_W, SLIDE_H)
+    rect.fill.solid()
+    rect.fill.fore_color.rgb = PRIMARY
+    
+    # Contenido
+    for i, s_raw in enumerate(data_list):
+        if "TÍTULO:" in s_raw:
+            slide = prs.slides.add_slide(prs.slide_layouts[6])
+            # Barra azul
+            bar = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0, SLIDE_W, Inches(0.2))
+            bar.fill.solid()
+            bar.fill.fore_color.rgb = PRIMARY
+            
+            lines = s_raw.strip().split("\n")
+            title_text = lines[0].replace("TÍTULO:", "").strip()
+            
+            # Título
+            txt = slide.shapes.add_textbox(Inches(0.8), Inches(0.5), Inches(11.5), Inches(1))
+            p = txt.text_frame.paragraphs[0]
+            p.text = title_text.upper()
+            p.font.size = Pt(26)
+            p.font.bold = True
+            p.font.color.rgb = PRIMARY
+            
+            # Puntos
+            body = slide.shapes.add_textbox(Inches(1), Inches(1.8), Inches(11), Inches(5))
+            tf = body.text_frame
+            for l in lines:
+                if l.strip().startswith("-"):
+                    p = tf.add_paragraph()
+                    p.text = "• " + l.strip().lstrip("-").strip()
+                    p.font.size = Pt(18)
+                    p.space_after = Pt(10)
+    
+    path = f"{filename}.pptx"
+    prs.save(path)
+    return path
 
-num_total = st.slider("Número total de diapositivas deseadas", 20, 80, 60)
-uploaded_file = st.file_uploader("Sube el PDF (Guía, Paper o Texto)", type="pdf")
+# --- INTERFAZ ---
+st.title("🏥 Generador Médico de 60 Slides")
+st.info("Para evitar desconexiones, generaremos la presentación en 4 bloques de 15 diapositivas.")
+
+uploaded_file = st.file_uploader("Sube tu PDF", type="pdf")
 
 if uploaded_file:
-    if st.button(f"🚀 Iniciar Generación de {num_total} Slides"):
-        try:
-            # 1. Leer PDF
-            reader = PdfReader(uploaded_file)
-            full_text = ""
-            for page in reader.pages:
-                full_text += (page.extract_text() or "") + "\n"
-            
-            # 2. Calcular Bloques (Ej: 60 slides = 4 bloques de 15)
-            batch_size = 15
-            num_batches = (num_total // batch_size) + (1 if num_total % batch_size != 0 else 0)
-            
-            all_raw_content = ""
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            
-            # 3. Generación por bloques (Evita el 404)
-            for i in range(num_batches):
-                status_text.text(f"⏳ Generando bloque {i+1} de {num_batches}...")
-                slides_to_gen = batch_size if (i < num_batches - 1) else (num_total - (i * batch_size))
-                all_raw_content += get_slides_batch(full_text, slides_to_gen, i)
-                progress_bar.progress((i + 1) / num_batches)
-            
-            # 4. Crear PPTX
-            status_text.text("🎨 Diseñando presentación final...")
-            prs = Presentation()
-            prs.slide_width, prs.slide_height = SLIDE_W, SLIDE_H
-            
-            # Portada
-            slide = prs.slides.add_slide(prs.slide_layouts[6])
-            rect = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0, SLIDE_W, SLIDE_H)
-            rect.fill.solid()
-            rect.fill.fore_color.rgb = PRIMARY
-            title = slide.shapes.add_textbox(Inches(1), Inches(3), Inches(11.3), Inches(2))
-            p = title.text_frame.paragraphs[0]
-            p.text = uploaded_file.name.replace(".pdf", "").upper()
-            p.font.size = Pt(40)
-            p.font.bold = True
-            p.font.color.rgb = WHITE
-            p.alignment = PP_ALIGN.CENTER
+    if not st.session_state.pdf_text:
+        reader = PdfReader(uploaded_file)
+        text = ""
+        for page in reader.pages:
+            text += (page.extract_text() or "") + "\n"
+        st.session_state.pdf_text = text
 
-            # Procesar Slides
-            raw_slides = all_raw_content.split("---SLIDE---")
-            valid_slides = 0
-            
-            for s_data in raw_slides:
-                if "TÍTULO:" in s_data and "PUNTOS:" in s_data:
-                    valid_slides += 1
-                    lines = s_data.strip().split("\n")
-                    title_text = lines[0].replace("TÍTULO:", "").strip()
-                    
-                    bullets = []
-                    for l in lines:
-                        if l.strip().startswith("-"):
-                            bullets.append(l.strip().lstrip("-").strip())
-                    
-                    slide = prs.slides.add_slide(prs.slide_layouts[6])
-                    apply_medical_style(slide, title_text, valid_slides, num_total)
-                    add_bullets(slide, bullets)
-                    
-                    if valid_slides >= num_total: break
+    # Lógica de bloques
+    total_blocks = 4
+    current = st.session_state.current_step
 
-            # 5. Descarga
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".pptx") as tmp:
-                prs.save(tmp.name)
-                with open(tmp.name, "rb") as f:
-                    st.success(f"✅ ¡Éxito! Se generaron {valid_slides} diapositivas médicas.")
-                    st.download_button(
-                        label="📥 Descargar Presentación Completa",
-                        data=f,
-                        file_name=f"Clase_Medica_{date.today()}.pptx",
-                        mime="application/vnd.openxmlformats-officedocument.presentationml.presentation"
-                    )
-            os.unlink(tmp.name)
-            status_text.empty()
+    if current < total_blocks:
+        if st.button(f"🚀 Generar Bloque {current + 1} de {total_blocks} (15 slides)"):
+            with st.spinner(f"Generando bloque {current + 1}..."):
+                raw = get_batch(st.session_state.pdf_text, 15, current)
+                new_slides = [s for s in raw.split("---SLIDE---") if "TÍTULO:" in s]
+                st.session_state.all_slides_data.extend(new_slides)
+                st.session_state.current_step += 1
+                st.rerun()
+    else:
+        st.success(f"✅ ¡Listo! {len(st.session_state.all_slides_data)} diapositivas generadas.")
+        if st.button("🎨 Finalizar y Preparar Descarga"):
+            pptx_path = create_pptx(st.session_state.all_slides_data, "Presentacion_Medica_60")
+            with open(pptx_path, "rb") as f:
+                st.download_button("📥 DESCARGAR POWERPOINT COMPLETO", f, file_name="Clase_Medica_60.pptx")
+        
+        if st.button("🔄 Empezar de nuevo"):
+            st.session_state.current_step = 0
+            st.session_state.all_slides_data = []
+            st.rerun()
 
-        except Exception as e:
-            st.error(f"Ocurrió un error: {e}")
+st.write(f"Progreso: {len(st.session_state.all_slides_data)} / 60 diapositivas")
